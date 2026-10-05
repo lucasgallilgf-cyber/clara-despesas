@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Apura a politica de refeicao por pessoa/dia a partir do extrato do cartao corporativo. Roda 100% no navegador: nenhum dado sai do computador.">
+<meta name="description" content="Apura a politica de refeicao por pessoa/dia a partir do extrato do cartao corporativo. Roda no navegador: nenhum dado sai do computador.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><text y=%22.9em%22 font-size=%2258%22>&#129534;</text></svg>">
 <style>
   :root{color-scheme:light}
@@ -258,6 +258,11 @@ tr.kids td{background:var(--surface-2); padding:0}
 .legend{display:flex; gap:20px; flex-wrap:wrap; margin-top:11px; font-size:11.5px; color:var(--muted)}
 .legend div{display:flex; gap:7px; align-items:baseline}
 
+.p-rej{background:var(--crit); color:#fff; border-color:var(--crit)}
+tbody tr.rej{background:var(--crit-bg)}
+tbody tr.rej td:nth-child(3),tbody tr.rej td:nth-child(6){text-decoration:line-through}
+.acts{display:flex; gap:4px; flex-wrap:wrap; margin-top:4px}
+
 .warn-box{
   background:var(--warn-bg); border:1px solid var(--warn-line); border-left:3px solid var(--warn);
   border-radius:var(--radius); padding:12px 15px; margin-bottom:24px;
@@ -293,6 +298,7 @@ tr.kids td{background:var(--surface-2); padding:0}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important; animation:none!important}}
 </style>
+
 </head>
 <body>
 
@@ -674,6 +680,7 @@ const S = {
   open:{},    // "titular|data" -> aberto
   mealOv:{},  // rowId -> true/false, quando o usuário corrige uma linha
   merchOv:{}, // estabelecimento -> true/false, vale para todas as linhas dele
+  rej:{},     // rowId -> {m:motivo}: despesa rejeitada, descontada pelo valor cheio
   semDesc:false
 };
 
@@ -683,17 +690,28 @@ const chave = e => stripAcc(e).replace(/\s+/g," ").trim();
    Precedência: a linha vence o estabelecimento, que vence o automático. */
 function refresh(){
   S.rows.forEach(r => {
+    r.rejeitada = r.valida && !!S.rej[r.id];
     const linha = S.mealOv[r.id];
     const estab = S.merchOv[chave(r.estab)];
     const base = estab === undefined ? r.mealAuto : estab;
-    r.meal = r.valida && (linha === undefined ? base : linha);
+    /* Despesa rejeitada sai da apuração da política: ela é cobrada pelo valor
+       cheio, então contá-la também no limite diário cobraria duas vezes. */
+    r.meal = r.valida && !r.rejeitada && (linha === undefined ? base : linha);
   });
+}
+
+/* Despesas rejeitadas do titular selecionado, cobradas integralmente. */
+function rejeitadas(){
+  return S.rows
+    .filter(r => r.titular === S.titular && r.rejeitada)
+    .sort((a,b) => a.dt - b.dt)
+    .map(r => ({r, motivo:(S.rej[r.id] || {}).m || ""}));
 }
 
 const KEY = "afericao-diarias-v1";
 function save(){
   try{
-    localStorage.setItem(KEY, JSON.stringify({sig:S.sig, hc:S.hc, adj:S.adj, limite:S.limite, mealOv:S.mealOv, merchOv:S.merchOv}));
+    localStorage.setItem(KEY, JSON.stringify({sig:S.sig, hc:S.hc, adj:S.adj, limite:S.limite, mealOv:S.mealOv, merchOv:S.merchOv, rej:S.rej}));
   }catch(e){/* modo privado, cota cheia: seguir sem persistir */}
 }
 function load(sig){
@@ -702,7 +720,7 @@ function load(sig){
     if (!raw) return;
     const o = JSON.parse(raw);
     if (o && o.sig === sig){
-      S.hc = o.hc || {}; S.adj = o.adj || {}; S.mealOv = o.mealOv || {}; S.merchOv = o.merchOv || {};
+      S.hc = o.hc || {}; S.adj = o.adj || {}; S.mealOv = o.mealOv || {}; S.merchOv = o.merchOv || {}; S.rej = o.rej || {};
       if (o.limite) { S.limite = o.limite; const el = document.getElementById("lim"); if (el) el.value = o.limite; }
     }
   }catch(e){/* ignora estado corrompido */}
@@ -1088,7 +1106,10 @@ function render(){
   const indef  = D.filter(d => d.estado === "indef");
   const ok     = D.filter(d => d.estado === "ok");
   const totExc = r2(acima.reduce((a,d) => a + d.excedente, 0));
-  const totCob = r2(D.reduce((a,d) => a + d.cobrar, 0));
+  const totLim = r2(D.reduce((a,d) => a + d.cobrar, 0));   // excedentes, já ajustados
+  const REJ    = rejeitadas();
+  const totRej = r2(REJ.reduce((a,x) => a + x.r.valor, 0)); // rejeitadas, valor cheio
+  const totCob = r2(totLim + totRej);
   const ajustados = D.filter(d => d.ajuste != null && d.ajuste !== d.excedente).length;
 
   document.getElementById("ph-sub").textContent =
@@ -1202,18 +1223,24 @@ function render(){
     kpi("Total de refeições", "R$ " + money(meals.reduce((a,r) => a + r.valor, 0)), meals.length + " lançamentos") +
     kpi("Dias com refeição", String(D.length), ok.length + " dentro do limite") +
     kpi("A recuperar", "R$ " + money(totCob),
-        ajustados ? ajustados + " dia(s) ajustado(s) à mão" : acima.length + " dia(s) acima do limite", true) +
+        totRej ? (acima.length + " dia(s) acima + " + REJ.length + " rejeitada(s)")
+               : ajustados ? ajustados + " dia(s) ajustado(s) à mão"
+               : acima.length + " dia(s) acima do limite", true) +
     kpi("A verificar", String(indef.length), "sem nº de pessoas") +
   '</div>';
 
   /* --- painel de recuperação --- */
   h += '<div class="sec"><h2><span class="eyebrow">Decisão</span> Valor a recuperar do colaborador</h2>' +
-       '<p>O sistema calcula o excedente da política. A cobrança é sua decisão: edite o valor e registre o motivo — ' +
-       'um refrigerante que estourou o limite não precisa virar desconto. O motivo entra no relatório impresso como justificativa.</p></div>';
+       '<p>São duas origens de cobrança. O <b>excedente da política</b>, que é só o que passou do limite diário — ' +
+       'e aí a cobrança é sua decisão: edite o valor e registre o motivo, porque um refrigerante que estourou o limite ' +
+       'não precisa virar desconto. E a <b>despesa rejeitada</b>, marcada por você na tabela de transações, que é ' +
+       'descontada pelo <b>valor cheio</b> por não ser uma despesa legítima da empresa. Os motivos entram no relatório ' +
+       'impresso como justificativa.</p></div>';
 
   if (!acima.length && !D.some(d => d.ajuste != null)){
     h += '<div class="tw"><div class="blank">Nenhum dia excedeu o limite' +
-         (indef.length ? ", entre os que puderam ser apurados." : ".") + '</div></div>';
+         (indef.length ? ", entre os que puderam ser apurados." : ".") +
+         (totRej ? " Há apenas despesas rejeitadas, no quadro abaixo." : "") + '</div></div>';
   } else {
     h += '<div class="tw"><table><thead><tr>' +
       '<th>Data</th><th class="r">Gasto/pessoa</th><th class="r">Limite</th>' +
@@ -1237,12 +1264,39 @@ function render(){
           '" value="' + esc(d.motivo) + '" placeholder="ex.: água mineral, não descontar"></td>' +
       '</tr>';
     });
-    h += '</tbody><tfoot><tr class="tfoot-lead"><td>Total a recuperar</td>' +
+    h += '</tbody><tfoot><tr' + (totRej ? "" : ' class="tfoot-lead"') + '><td>' +
+         (totRej ? "Subtotal do excedente" : "Total a recuperar") + '</td>' +
          '<td colspan="2"></td>' +
          '<td class="r num">R$ ' + money(totExc) + '</td>' +
-         '<td class="r num">R$ ' + money(totCob) + '</td>' +
+         '<td class="r num">R$ ' + money(totLim) + '</td>' +
          '<td class="sub" style="color:inherit;opacity:.8">' +
-         (totCob !== totExc ? "após ajustes manuais" : "sem ajustes") + '</td></tr></tfoot></table></div>';
+         (totLim !== totExc ? "após ajustes manuais" : "sem ajustes") + '</td></tr></tfoot></table></div>';
+  }
+
+  /* --- despesas rejeitadas: cobradas pelo valor cheio --- */
+  if (REJ.length){
+    h += '<div class="sp" style="height:18px"></div>';
+    h += '<div class="tw"><table><thead><tr>' +
+      '<th>Data</th><th>Despesa rejeitada</th><th class="r">Valor cheio</th>' +
+      '<th class="c" style="width:90px">—</th><th>Motivo da rejeição</th>' +
+      '</tr></thead><tbody>';
+    REJ.forEach(({r, motivo}) => {
+      h += '<tr class="zebra s-acima">' +
+        '<td class="num">' + esc(r.data) + '</td>' +
+        '<td>' + esc(r.estab) + (r.desc ? '<div class="sub">' + esc(r.desc) + '</div>' : "") + '</td>' +
+        '<td class="r num" style="font-weight:600;color:var(--crit)">R$ ' + money(r.valor) + '</td>' +
+        '<td class="c"><button class="btn btn-sm noprint unrej" data-r="' + r.id + '">desfazer</button></td>' +
+        '<td><input type="text" class="rej-m adj-note" data-r="' + r.id +
+          '" value="' + esc(motivo) + '" placeholder="ex.: despesa pessoal, fora da politica"></td>' +
+      '</tr>';
+    });
+    h += '</tbody><tfoot><tr><td>Subtotal rejeitadas</td><td></td>' +
+         '<td class="r num">R$ ' + money(totRej) + '</td><td colspan="2"></td></tr>' +
+         '<tr class="tfoot-lead"><td>Total a recuperar</td><td></td>' +
+         '<td class="r num">R$ ' + money(totCob) + '</td>' +
+         '<td colspan="2" class="sub" style="color:inherit;opacity:.8">' +
+         'excedente R$ ' + money(totLim) + ' + rejeitadas R$ ' + money(totRej) +
+         '</td></tr></tfoot></table></div>';
   }
 
   if (indef.length){
@@ -1295,6 +1349,7 @@ function render(){
             '" data-h="' + r.id + '" value="' + (n || "") + '" placeholder="?" title="Nº de pessoas no recibo"></div>' +
           '<div class="r num' + (need ? " sub" : "") + '">' +
             (need ? "informe" : "R$ " + money(r.valor / n) + '<div class="sub" style="font-size:10px">' + esc(r.hcBase === "informado" ? "informado" : r.hcBase === "nomes" ? "nomes citados" : r.hcBase === "equipe" ? "definido à mão" : "individual") + '</div>') +
+            '<button class="btn btn-sm noprint rejb" data-r="' + r.id + '" style="margin-top:3px" title="Descontar o valor cheio">rejeitar</button>' +
           '</div>' +
         '</div>';
       });
@@ -1324,6 +1379,9 @@ function render(){
       pol = '<span class="pill p-out">' +
         (r.pagamento ? "Pagamento da fatura" : r.anulado ? "Estornada" : "Recusada") + '</span>';
       cls = "sub";
+    } else if (r.rejeitada){
+      pol = '<span class="pill p-rej">Rejeitada — cobrança integral</span>';
+      cls = "rej";
     } else if (!r.meal){
       pol = '<span class="p-na">não aplicável</span>';
     } else {
@@ -1334,9 +1392,18 @@ function render(){
       if (r.mealFonte === "estabelecimento")
         pol += '<div class="sub" style="font-size:10px">pelo estabelecimento</div>';
     }
-    if (r.valida)
-      pol += '<button class="btn btn-sm noprint mtog" data-m="' + r.id + '" style="margin-top:3px">' +
-             (r.meal ? "não é refeição" : "é refeição") + '</button>';
+    if (r.valida){
+      pol += '<div class="acts noprint">';
+      if (r.rejeitada){
+        pol += '<button class="btn btn-sm unrej" data-r="' + r.id + '">desfazer rejeição</button>';
+      } else {
+        pol += '<button class="btn btn-sm mtog" data-m="' + r.id + '">' +
+               (r.meal ? "não é refeição" : "é refeição") + '</button>' +
+               '<button class="btn btn-sm rejb" data-r="' + r.id +
+               '" title="Descontar o valor cheio desta despesa">rejeitar</button>';
+      }
+      pol += '</div>';
+    }
     const n = r.meal ? pessoas(r) : null;
     h += '<tr class="zebra ' + cls + '">' +
       '<td class="num">' + esc(r.data) + '</td>' +
@@ -1406,6 +1473,17 @@ function wire(){
   });
   const gr = document.getElementById("greset");
   if (gr) gr.onclick = () => { S.merchOv = {}; save(); render(); };
+
+  app.querySelectorAll(".rejb").forEach(b => b.onclick = () => {
+    S.rej[b.dataset.r] = {m:""}; save(); render();
+  });
+  app.querySelectorAll(".unrej").forEach(b => b.onclick = () => {
+    delete S.rej[b.dataset.r]; save(); render();
+  });
+  // o motivo não re-renderiza a cada tecla, para não perder o foco
+  app.querySelectorAll(".rej-m").forEach(i => i.oninput = () => {
+    S.rej[i.dataset.r] = {m:i.value}; save();
+  });
 
   app.querySelectorAll(".mtog").forEach(b => b.onclick = () => {
     const r = S.rows.find(x => x.id === b.dataset.m);
