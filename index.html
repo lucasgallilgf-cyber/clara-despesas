@@ -700,12 +700,24 @@ function refresh(){
   });
 }
 
-/* Despesas rejeitadas do titular selecionado, cobradas integralmente. */
+/* Despesas rejeitadas do titular selecionado. O padrão é cobrar o valor
+   cheio, mas o valor é editável: nem toda rejeição se cobra por inteiro. */
 function rejeitadas(){
   return S.rows
     .filter(r => r.titular === S.titular && r.rejeitada)
     .sort((a,b) => a.dt - b.dt)
-    .map(r => ({r, motivo:(S.rej[r.id] || {}).m || ""}));
+    .map(r => {
+      const o = S.rej[r.id] || {};
+      const aj = (o.v === "" || o.v == null) ? null : r2(+o.v);
+      return {r, motivo:o.m || "", ajuste:aj, cobrar:(aj != null ? aj : r2(r.valor))};
+    });
+}
+
+/* Mescla um campo no registro da rejeição sem apagar os outros. */
+function setRej(id, campo, valor){
+  const o = S.rej[id] || {};
+  o[campo] = valor;
+  S.rej[id] = o;
 }
 
 const KEY = "afericao-diarias-v1";
@@ -1108,7 +1120,7 @@ function render(){
   const totExc = r2(acima.reduce((a,d) => a + d.excedente, 0));
   const totLim = r2(D.reduce((a,d) => a + d.cobrar, 0));   // excedentes, já ajustados
   const REJ    = rejeitadas();
-  const totRej = r2(REJ.reduce((a,x) => a + x.r.valor, 0)); // rejeitadas, valor cheio
+  const totRej = r2(REJ.reduce((a,x) => a + x.cobrar, 0)); // rejeitadas, já ajustadas
   const totCob = r2(totLim + totRej);
   const ajustados = D.filter(d => d.ajuste != null && d.ajuste !== d.excedente).length;
 
@@ -1276,23 +1288,35 @@ function render(){
   /* --- despesas rejeitadas: cobradas pelo valor cheio --- */
   if (REJ.length){
     h += '<div class="sp" style="height:18px"></div>';
+    const cheio = r2(REJ.reduce((a,x) => a + x.r.valor, 0));
     h += '<div class="tw"><table><thead><tr>' +
       '<th>Data</th><th>Despesa rejeitada</th><th class="r">Valor cheio</th>' +
-      '<th class="c" style="width:90px">—</th><th>Motivo da rejeição</th>' +
+      '<th class="r">A cobrar</th><th>Motivo da rejeição</th><th class="c" style="width:78px">—</th>' +
       '</tr></thead><tbody>';
-    REJ.forEach(({r, motivo}) => {
+    REJ.forEach(({r, motivo, ajuste, cobrar}) => {
+      const mudou = ajuste != null && Math.abs(ajuste - r2(r.valor)) > 0.004;
       h += '<tr class="zebra s-acima">' +
         '<td class="num">' + esc(r.data) + '</td>' +
         '<td>' + esc(r.estab) + (r.desc ? '<div class="sub">' + esc(r.desc) + '</div>' : "") + '</td>' +
-        '<td class="r num" style="font-weight:600;color:var(--crit)">R$ ' + money(r.valor) + '</td>' +
-        '<td class="c"><button class="btn btn-sm noprint unrej" data-r="' + r.id + '">desfazer</button></td>' +
+        '<td class="r num' + (mudou ? " strike" : "") + '" style="' +
+          (mudou ? "" : "font-weight:600;color:var(--crit)") + '">R$ ' + money(r.valor) + '</td>' +
+        '<td class="r"><div class="adj">' +
+          '<span class="sub">R$</span>' +
+          '<input type="number" step="0.01" min="0" class="rej-v' + (mudou ? " edited" : "") +
+          '" data-r="' + r.id + '" value="' + cobrar.toFixed(2) + '">' +
+          '<button class="btn btn-sm noprint rej-zero" data-r="' + r.id + '" title="Não cobrar esta despesa">zerar</button>' +
+        '</div></td>' +
         '<td><input type="text" class="rej-m adj-note" data-r="' + r.id +
           '" value="' + esc(motivo) + '" placeholder="ex.: despesa pessoal, fora da politica"></td>' +
+        '<td class="c"><button class="btn btn-sm noprint unrej" data-r="' + r.id + '">desfazer</button></td>' +
       '</tr>';
     });
     h += '</tbody><tfoot><tr><td>Subtotal rejeitadas</td><td></td>' +
-         '<td class="r num">R$ ' + money(totRej) + '</td><td colspan="2"></td></tr>' +
-         '<tr class="tfoot-lead"><td>Total a recuperar</td><td></td>' +
+         '<td class="r num">R$ ' + money(cheio) + '</td>' +
+         '<td class="r num">R$ ' + money(totRej) + '</td>' +
+         '<td colspan="2" class="sub">' +
+         (totRej !== cheio ? "após ajuste do valor" : "pelo valor cheio") + '</td></tr>' +
+         '<tr class="tfoot-lead"><td>Total a recuperar</td><td colspan="2"></td>' +
          '<td class="r num">R$ ' + money(totCob) + '</td>' +
          '<td colspan="2" class="sub" style="color:inherit;opacity:.8">' +
          'excedente R$ ' + money(totLim) + ' + rejeitadas R$ ' + money(totRej) +
@@ -1475,14 +1499,22 @@ function wire(){
   if (gr) gr.onclick = () => { S.merchOv = {}; save(); render(); };
 
   app.querySelectorAll(".rejb").forEach(b => b.onclick = () => {
-    S.rej[b.dataset.r] = {m:""}; save(); render();
+    if (!S.rej[b.dataset.r]) S.rej[b.dataset.r] = {m:"", v:null};
+    save(); render();
   });
   app.querySelectorAll(".unrej").forEach(b => b.onclick = () => {
     delete S.rej[b.dataset.r]; save(); render();
   });
+  app.querySelectorAll(".rej-v").forEach(i => i.onchange = () => {
+    setRej(i.dataset.r, "v", i.value === "" ? null : Math.max(0, +i.value));
+    save(); render();
+  });
+  app.querySelectorAll(".rej-zero").forEach(b => b.onclick = () => {
+    setRej(b.dataset.r, "v", 0); save(); render();
+  });
   // o motivo não re-renderiza a cada tecla, para não perder o foco
   app.querySelectorAll(".rej-m").forEach(i => i.oninput = () => {
-    S.rej[i.dataset.r] = {m:i.value}; save();
+    setRej(i.dataset.r, "m", i.value); save();
   });
 
   app.querySelectorAll(".mtog").forEach(b => b.onclick = () => {
