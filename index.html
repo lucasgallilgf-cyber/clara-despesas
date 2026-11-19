@@ -35,6 +35,9 @@
   --warn-line:#eeddba;
   --ok:#14653c;
   --ok-bg:#eef6f1;
+  --tol:#7a5c00;
+  --tol-bg:#fff8e1;
+  --tol-line:#ecd98f;
   --shadow:0 1px 2px rgba(16,32,43,.06), 0 8px 24px -12px rgba(16,32,43,.18);
   --radius:6px;
 }
@@ -59,6 +62,9 @@
     --warn-line:#453720;
     --ok:#8ed3a8;
     --ok-bg:#152a1f;
+    --tol:#f0cf7a;
+    --tol-bg:#2b2410;
+    --tol-line:#4a3d1a;
     --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
   }
 }
@@ -82,6 +88,9 @@
   --warn-line:#453720;
   --ok:#8ed3a8;
   --ok-bg:#152a1f;
+  --tol:#f0cf7a;
+  --tol-bg:#2b2410;
+  --tol-line:#4a3d1a;
   --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
 }
 
@@ -207,6 +216,7 @@ td{padding:7px 11px; border-top:1px solid var(--line-soft); vertical-align:middl
 .c{text-align:center}
 tbody tr.s-acima{background:var(--crit-bg)}
 tbody tr.s-indef{background:var(--warn-bg)}
+tbody tr.s-tol{background:var(--tol-bg)}
 tr.zebra:hover{background:var(--surface-2)}
 tfoot td{
   border-top:2px solid var(--accent); background:var(--surface-2);
@@ -222,6 +232,7 @@ tfoot td{
 .p-acima{background:var(--crit-bg); color:var(--crit); border-color:var(--crit-line)}
 .p-indef{background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line)}
 .p-ok{background:var(--ok-bg); color:var(--ok)}
+.p-tol{background:var(--tol-bg); color:var(--tol); border-color:var(--tol-line)}
 .p-na{color:var(--muted); font-weight:500}
 .p-out{background:var(--surface-2); color:var(--muted)}
 
@@ -290,7 +301,7 @@ tbody tr.rej td:nth-child(3),tbody tr.rej td:nth-child(6){text-decoration:line-t
   .tw{border:1px solid #999; box-shadow:none; overflow:visible}
   table{min-width:0}
   th{background:#0d4f5c!important; color:#fff!important; -webkit-print-color-adjust:exact; print-color-adjust:exact}
-  tbody tr.s-acima,tbody tr.s-indef,.pill,.kpi.lead,.tfoot-lead td{-webkit-print-color-adjust:exact; print-color-adjust:exact}
+  tbody tr.s-acima,tbody tr.s-indef,tbody tr.s-tol,.pill,.kpi.lead,.tfoot-lead td{-webkit-print-color-adjust:exact; print-color-adjust:exact}
   tr,.kpi{page-break-inside:avoid}
   input,select{border:0!important; background:none!important; padding:0!important; color:#000!important}
   .sp{height:16px}
@@ -381,6 +392,11 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     <label for="lim">Limite por pessoa/dia</label>
     <span class="num" style="color:var(--muted)">R$</span>
     <input type="number" id="lim" value="100" min="0" step="1" style="width:74px;text-align:right">
+  </div>
+  <div class="bar-field">
+    <label for="tol" title="Estouro tolerado: até este valor acima do limite o dia só é sinalizado, não é cobrado">Tolerância</label>
+    <span class="num" style="color:var(--muted)">R$</span>
+    <input type="number" id="tol" value="20" min="0" step="1" style="width:66px;text-align:right">
   </div>
   <button class="btn" id="cols" style="display:none">Colunas</button>
   <button class="btn" id="pick">Abrir arquivo</button>
@@ -674,7 +690,7 @@ function headcount(desc){
    ======================================================================== */
 
 const S = {
-  rows:[], titular:null, limite:100, demo:true, fonte:"demonstração",
+  rows:[], titular:null, limite:100, tol:20, demo:true, fonte:"demonstração",
   hc:{},      // rowId -> nº de pessoas informado à mão
   adj:{},     // "titular|data" -> {v:valor, m:motivo}
   open:{},    // "titular|data" -> aberto
@@ -723,7 +739,7 @@ function setRej(id, campo, valor){
 const KEY = "afericao-diarias-v1";
 function save(){
   try{
-    localStorage.setItem(KEY, JSON.stringify({sig:S.sig, hc:S.hc, adj:S.adj, limite:S.limite, mealOv:S.mealOv, merchOv:S.merchOv, rej:S.rej}));
+    localStorage.setItem(KEY, JSON.stringify({sig:S.sig, hc:S.hc, adj:S.adj, limite:S.limite, tol:S.tol, mealOv:S.mealOv, merchOv:S.merchOv, rej:S.rej}));
   }catch(e){/* modo privado, cota cheia: seguir sem persistir */}
 }
 function load(sig){
@@ -734,6 +750,7 @@ function load(sig){
     if (o && o.sig === sig){
       S.hc = o.hc || {}; S.adj = o.adj || {}; S.mealOv = o.mealOv || {}; S.merchOv = o.merchOv || {}; S.rej = o.rej || {};
       if (o.limite) { S.limite = o.limite; const el = document.getElementById("lim"); if (el) el.value = o.limite; }
+      if (o.tol != null) { S.tol = o.tol; const et = document.getElementById("tol"); if (et) et.value = o.tol; }
     }
   }catch(e){/* ignora estado corrompido */}
 }
@@ -1015,8 +1032,16 @@ function dias(){
   const arr = [...out.values()].sort((a,b) => a.dt - b.dt);
   arr.forEach(d => {
     d.total = r2(d.total); d.share = r2(d.share);
-    d.estado = d.indef ? "indef" : (d.share > S.limite + 0.004 ? "acima" : "ok");
-    d.excedente = d.estado === "acima" ? r2(d.share - S.limite) : 0;
+    /* Tres faixas: dentro do limite, dentro da tolerancia (sinaliza mas nao
+       cobra) e acima da tolerancia (cobra o excedente sobre o LIMITE, nao
+       sobre a tolerancia: a folga vale enquanto o estouro e' pequeno). */
+    const excesso = r2(d.share - S.limite);
+    d.estado = d.indef ? "indef"
+             : excesso <= 0.004 ? "ok"
+             : excesso <= S.tol + 0.004 ? "tol"
+             : "acima";
+    d.excesso = Math.max(0, excesso);
+    d.excedente = d.estado === "acima" ? excesso : 0;
     const a = S.adj[S.titular + "|" + d.data];
     d.ajuste = a && a.v !== "" && a.v != null ? r2(+a.v) : null;
     d.motivo = a ? (a.m || "") : "";
@@ -1117,6 +1142,7 @@ function render(){
   const acima  = D.filter(d => d.estado === "acima");
   const indef  = D.filter(d => d.estado === "indef");
   const ok     = D.filter(d => d.estado === "ok");
+  const tolera = D.filter(d => d.estado === "tol");
   const totExc = r2(acima.reduce((a,d) => a + d.excedente, 0));
   const totLim = r2(D.reduce((a,d) => a + d.cobrar, 0));   // excedentes, já ajustados
   const REJ    = rejeitadas();
@@ -1125,7 +1151,7 @@ function render(){
   const ajustados = D.filter(d => d.ajuste != null && d.ajuste !== d.excedente).length;
 
   document.getElementById("ph-sub").textContent =
-    S.titular + " · limite de R$ " + money(S.limite) + " por pessoa/dia · " +
+    S.titular + " · limite de R$ " + money(S.limite) + " por pessoa/dia, tolerância de R$ " + money(S.tol) + " · " +
     (D.length ? D[0].data + " a " + D[D.length-1].data : "sem refeições") +
     " · fonte: " + S.fonte + " · emitido em " + new Date().toLocaleDateString("pt-BR");
 
@@ -1233,7 +1259,8 @@ function render(){
   h += '<div class="kpis">' +
     kpi("Despesas autorizadas", "R$ " + money(val.reduce((a,r) => a + r.valor, 0)), val.length + " transações") +
     kpi("Total de refeições", "R$ " + money(meals.reduce((a,r) => a + r.valor, 0)), meals.length + " lançamentos") +
-    kpi("Dias com refeição", String(D.length), ok.length + " dentro do limite") +
+    kpi("Dias com refeição", String(D.length),
+        ok.length + " dentro, " + tolera.length + " na tolerância") +
     kpi("A recuperar", "R$ " + money(totCob),
         totRej ? (acima.length + " dia(s) acima + " + REJ.length + " rejeitada(s)")
                : ajustados ? ajustados + " dia(s) ajustado(s) à mão"
@@ -1243,14 +1270,19 @@ function render(){
 
   /* --- painel de recuperação --- */
   h += '<div class="sec"><h2><span class="eyebrow">Decisão</span> Valor a recuperar do colaborador</h2>' +
-       '<p>São duas origens de cobrança. O <b>excedente da política</b>, que é só o que passou do limite diário — ' +
+       '<p>Só entram aqui os dias que passaram de R$ ' + money(S.limite + S.tol) +
+       ' por pessoa, ou seja, que estouraram o limite de R$ ' + money(S.limite) +
+       ' além da tolerância de R$ ' + money(S.tol) + '. Dia que ficou dentro da tolerância aparece em amarelo na apuração ' +
+       'e não é cobrado. São duas origens de cobrança. O <b>excedente da política</b>, contado a partir do limite de R$ ' +
+       money(S.limite) + ' — ' +
        'e aí a cobrança é sua decisão: edite o valor e registre o motivo, porque um refrigerante que estourou o limite ' +
        'não precisa virar desconto. E a <b>despesa rejeitada</b>, marcada por você na tabela de transações, que é ' +
        'descontada pelo <b>valor cheio</b> por não ser uma despesa legítima da empresa. Os motivos entram no relatório ' +
        'impresso como justificativa.</p></div>';
 
   if (!acima.length && !D.some(d => d.ajuste != null)){
-    h += '<div class="tw"><div class="blank">Nenhum dia excedeu o limite' +
+    h += '<div class="tw"><div class="blank">Nenhum dia passou de R$ ' + money(S.limite + S.tol) + ' por pessoa' +
+         (tolera.length ? " — " + tolera.length + " ficaram na faixa de tolerância, sinalizados em amarelo mas não cobrados" : "") +
          (indef.length ? ", entre os que puderam ser apurados." : ".") +
          (totRej ? " Há apenas despesas rejeitadas, no quadro abaixo." : "") + '</div></div>';
   } else {
@@ -1333,8 +1365,9 @@ function render(){
   /* --- aderência dia a dia --- */
   h += '<div class="sp"></div>';
   h += '<div class="sec"><h2><span class="eyebrow">Apuração</span> Aderência dia a dia</h2>' +
-       '<p>Cada refeição é dividida pelo número de pessoas do recibo, e é esse valor por pessoa que se compara ao limite. ' +
-       'Clique na data para ver os lançamentos do dia e corrigir o nº de pessoas.</p></div>';
+       '<p>Cada refeição é dividida pelo número de pessoas do recibo, e é esse valor por pessoa que se compara ao limite de R$ ' +
+       money(S.limite) + '. Até R$ ' + money(S.tol) + ' de estouro o dia fica <b>amarelo</b>: é sinalizado para você ver, mas não gera cobrança. ' +
+       'Acima disso fica vermelho e entra no valor a recuperar. Clique na data para ver os lançamentos do dia e corrigir o nº de pessoas.</p></div>';
   h += '<div class="tw"><table><thead><tr>' +
     '<th style="width:26px"></th><th>Data</th><th class="c">Itens</th><th class="r">Total do dia</th>' +
     '<th class="r">Gasto/pessoa</th><th class="r">Limite</th><th class="r">Diferença</th><th>Situação</th>' +
@@ -1345,7 +1378,8 @@ function render(){
   }
   D.forEach(d => {
     const k = S.titular + "|" + d.data, aberto = !!S.open[k];
-    const pill = d.estado === "acima" ? '<span class="pill p-acima">Acima do limite</span>'
+    const pill = d.estado === "acima" ? '<span class="pill p-acima">Acima da tolerância</span>'
+              : d.estado === "tol"   ? '<span class="pill p-tol">Na tolerância</span>'
               : d.estado === "indef" ? '<span class="pill p-indef">Falta nº de pessoas</span>'
               : '<span class="pill p-ok">Dentro do limite</span>';
     h += '<tr class="zebra s-' + d.estado + '">' +
@@ -1358,6 +1392,9 @@ function render(){
       '<td class="r num sub">R$ ' + money(S.limite) + '</td>' +
       '<td class="r num">' + (d.indef ? '<span class="sub">—</span>'
           : d.estado === "acima" ? '<span style="color:var(--crit);font-weight:600">+ ' + money(d.excedente) + '</span>'
+          : d.estado === "tol" ? '<span style="color:var(--tol);font-weight:600">+ ' + money(d.excesso) +
+                                 '</span><div class="sub" style="font-size:10px">tolerado</div>'
+          : (S.limite - d.share) < 0.005 ? '<span class="sub">no limite</span>'
           : '<span class="sub">- ' + money(S.limite - d.share) + '</span>') + '</td>' +
       '<td>' + pill + '</td>' +
     '</tr>';
@@ -1384,8 +1421,9 @@ function render(){
        '</td><td class="r num">R$ ' + money(meals.reduce((a,r) => a + r.valor, 0)) +
        '</td><td colspan="4"></td></tr></tfoot></table></div>';
 
-  h += '<div class="legend"><div><span class="pill p-ok">Dentro do limite</span> valor por pessoa igual ou abaixo do limite</div>' +
-       '<div><span class="pill p-acima">Acima do limite</span> gerou excedente a decidir</div>' +
+  h += '<div class="legend"><div><span class="pill p-ok">Dentro do limite</span> até R$ ' + money(S.limite) + ' por pessoa</div>' +
+       '<div><span class="pill p-tol">Na tolerância</span> estourou até R$ ' + money(S.tol) + ' — sinalizado, não cobrado</div>' +
+       '<div><span class="pill p-acima">Acima da tolerância</span> passou de R$ ' + money(S.limite + S.tol) + ', gera cobrança</div>' +
        '<div><span class="pill p-indef">Falta nº de pessoas</span> refeição coletiva sem headcount no extrato</div></div>';
 
   /* --- transações --- */
@@ -1411,6 +1449,7 @@ function render(){
     } else {
       const d = D.find(x => x.data === r.data);
       pol = d && d.estado === "acima" ? '<span class="pill p-acima">Dia acima</span>'
+          : d && d.estado === "tol"   ? '<span class="pill p-tol">Na tolerância</span>'
           : d && d.estado === "indef" ? '<span class="pill p-indef">A verificar</span>'
           : '<span class="pill p-ok">Dentro</span>';
       if (r.mealFonte === "estabelecimento")
@@ -1608,6 +1647,10 @@ drop.addEventListener("drop", e => {
   if (e.dataTransfer && e.dataTransfer.files.length) readFile(e.dataTransfer.files[0]);
 });
 
+document.getElementById("tol").onchange = e => {
+  const v = parseFloat(e.target.value);
+  S.tol = isNaN(v) || v < 0 ? 0 : v; save(); render();
+};
 document.getElementById("lim").onchange = e => {
   const v = parseFloat(e.target.value);
   S.limite = isNaN(v) || v < 0 ? 0 : v; save(); render();
@@ -1624,7 +1667,7 @@ document.getElementById("cols").onclick = () => {
 
 const DEMO = [
 "Data da Transação;Transação;Valor em R$;Cartão;Status;Status de aprovação;Categoria da Compra;Recibo;Titular;Grupos;Localização;Descrição",
-"04/08/2026;RESTAURANTE DOM AFONSO;92.40;5512;Autorizada;Aprovada;Alimentação;Sim;MARIANA COUTINHO;201-COMERCIAL;POA;Jantar Mariana",
+"04/08/2026;RESTAURANTE DOM AFONSO;112.40;5512;Autorizada;Aprovada;Alimentação;Sim;MARIANA COUTINHO;201-COMERCIAL;POA;Jantar Mariana",
 "04/08/2026;PADARIA CENTRAL;24.90;5512;Autorizada;Aprovada;Alimentação;Sim;MARIANA COUTINHO;201-COMERCIAL;POA;Almoço Mariana",
 "05/08/2026;CANTINA DA ESQUINA;96.00;5512;Autorizada;Aprovada;Alimentação;Sim;MARIANA COUTINHO;201-COMERCIAL;POA;Jantar Mariana",
 "06/08/2026;MERCADO SAO JORGE;6.50;5512;Autorizada;Aprovada;Lojas De Varejo;Sim;MARIANA COUTINHO;201-COMERCIAL;POA;Água mineral no almoço",
