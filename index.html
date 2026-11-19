@@ -274,6 +274,14 @@ tbody tr.rej{background:var(--crit-bg)}
 tbody tr.rej td:nth-child(3),tbody tr.rej td:nth-child(6){text-decoration:line-through}
 .acts{display:flex; gap:4px; flex-wrap:wrap; margin-top:4px}
 
+.min-box{
+  border-radius:var(--radius); padding:11px 14px; margin-top:12px;
+  font-size:12.5px; line-height:1.55; max-width:100ch; border:1px solid transparent;
+}
+.min-box.nao{background:var(--tol-bg); border-color:var(--tol-line); color:var(--tol)}
+.min-box.sim{background:var(--crit-bg); border-color:var(--crit-line); color:var(--crit)}
+.min-box b{font-weight:600}
+
 .warn-box{
   background:var(--warn-bg); border:1px solid var(--warn-line); border-left:3px solid var(--warn);
   border-radius:var(--radius); padding:12px 15px; margin-bottom:24px;
@@ -394,9 +402,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     <input type="number" id="lim" value="100" min="0" step="1" style="width:74px;text-align:right">
   </div>
   <div class="bar-field">
-    <label for="tol" title="Estouro tolerado: até este valor acima do limite o dia só é sinalizado, não é cobrado">Tolerância</label>
+    <label for="minc" title="Se o total apurado do colaborador ficar neste valor ou abaixo, não se cobra nada">Mínimo para cobrar</label>
     <span class="num" style="color:var(--muted)">R$</span>
-    <input type="number" id="tol" value="20" min="0" step="1" style="width:66px;text-align:right">
+    <input type="number" id="minc" value="20" min="0" step="1" style="width:66px;text-align:right">
   </div>
   <button class="btn" id="cols" style="display:none">Colunas</button>
   <button class="btn" id="pick">Abrir arquivo</button>
@@ -690,7 +698,7 @@ function headcount(desc){
    ======================================================================== */
 
 const S = {
-  rows:[], titular:null, limite:100, tol:20, demo:true, fonte:"demonstração",
+  rows:[], titular:null, limite:100, minCob:20, demo:true, fonte:"demonstração",
   hc:{},      // rowId -> nº de pessoas informado à mão
   adj:{},     // "titular|data" -> {v:valor, m:motivo}
   open:{},    // "titular|data" -> aberto
@@ -739,7 +747,7 @@ function setRej(id, campo, valor){
 const KEY = "afericao-diarias-v1";
 function save(){
   try{
-    localStorage.setItem(KEY, JSON.stringify({sig:S.sig, hc:S.hc, adj:S.adj, limite:S.limite, tol:S.tol, mealOv:S.mealOv, merchOv:S.merchOv, rej:S.rej}));
+    localStorage.setItem(KEY, JSON.stringify({sig:S.sig, hc:S.hc, adj:S.adj, limite:S.limite, minCob:S.minCob, mealOv:S.mealOv, merchOv:S.merchOv, rej:S.rej}));
   }catch(e){/* modo privado, cota cheia: seguir sem persistir */}
 }
 function load(sig){
@@ -750,7 +758,7 @@ function load(sig){
     if (o && o.sig === sig){
       S.hc = o.hc || {}; S.adj = o.adj || {}; S.mealOv = o.mealOv || {}; S.merchOv = o.merchOv || {}; S.rej = o.rej || {};
       if (o.limite) { S.limite = o.limite; const el = document.getElementById("lim"); if (el) el.value = o.limite; }
-      if (o.tol != null) { S.tol = o.tol; const et = document.getElementById("tol"); if (et) et.value = o.tol; }
+      if (o.minCob != null) { S.minCob = o.minCob; const em = document.getElementById("minc"); if (em) em.value = o.minCob; }
     }
   }catch(e){/* ignora estado corrompido */}
 }
@@ -1032,16 +1040,10 @@ function dias(){
   const arr = [...out.values()].sort((a,b) => a.dt - b.dt);
   arr.forEach(d => {
     d.total = r2(d.total); d.share = r2(d.share);
-    /* Tres faixas: dentro do limite, dentro da tolerancia (sinaliza mas nao
-       cobra) e acima da tolerancia (cobra o excedente sobre o LIMITE, nao
-       sobre a tolerancia: a folga vale enquanto o estouro e' pequeno). */
-    const excesso = r2(d.share - S.limite);
-    d.estado = d.indef ? "indef"
-             : excesso <= 0.004 ? "ok"
-             : excesso <= S.tol + 0.004 ? "tol"
-             : "acima";
-    d.excesso = Math.max(0, excesso);
-    d.excedente = d.estado === "acima" ? excesso : 0;
+    /* O dia e' simplesmente dentro ou acima do limite. A folga de valor
+       pequeno nao e' aqui: ela se aplica ao TOTAL do colaborador, no fim. */
+    d.estado = d.indef ? "indef" : (d.share > S.limite + 0.004 ? "acima" : "ok");
+    d.excedente = d.estado === "acima" ? r2(d.share - S.limite) : 0;
     const a = S.adj[S.titular + "|" + d.data];
     d.ajuste = a && a.v !== "" && a.v != null ? r2(+a.v) : null;
     d.motivo = a ? (a.m || "") : "";
@@ -1142,18 +1144,31 @@ function render(){
   const acima  = D.filter(d => d.estado === "acima");
   const indef  = D.filter(d => d.estado === "indef");
   const ok     = D.filter(d => d.estado === "ok");
-  const tolera = D.filter(d => d.estado === "tol");
   const totExc = r2(acima.reduce((a,d) => a + d.excedente, 0));
   const totLim = r2(D.reduce((a,d) => a + d.cobrar, 0));   // excedentes, já ajustados
   const REJ    = rejeitadas();
   const totRej = r2(REJ.reduce((a,x) => a + x.cobrar, 0)); // rejeitadas, já ajustadas
-  const totCob = r2(totLim + totRej);
+  const totApurado = r2(totLim + totRej);
+  /* Cobranca minima: abaixo dela o processo custa mais do que o valor. */
+  const abaixoMin = totApurado > 0.004 && totApurado <= S.minCob + 0.004;
+  const totCob = abaixoMin ? 0 : totApurado;
   const ajustados = D.filter(d => d.ajuste != null && d.ajuste !== d.excedente).length;
 
   document.getElementById("ph-sub").textContent =
-    S.titular + " · limite de R$ " + money(S.limite) + " por pessoa/dia, tolerância de R$ " + money(S.tol) + " · " +
+    S.titular + " · limite de R$ " + money(S.limite) + " por pessoa/dia · mínimo para cobrança R$ " + money(S.minCob) + " · " +
     (D.length ? D[0].data + " a " + D[D.length-1].data : "sem refeições") +
     " · fonte: " + S.fonte + " · emitido em " + new Date().toLocaleDateString("pt-BR");
+
+
+  /* Faixa que explica a regra do minimo, mostrada logo abaixo dos totais. */
+  const avisoMin = abaixoMin
+    ? '<div class="min-box nao"><b>Não cobrar.</b> O total apurado de R$ ' + money(totApurado) +
+      ' está dentro do mínimo de R$ ' + money(S.minCob) + ' por colaborador. Abaixo desse valor a cobrança não se justifica, ' +
+      'então o valor a recuperar fica em R$ 0,00. Os dias acima do limite continuam listados para registro.</div>'
+    : (totApurado > 0.004
+      ? '<div class="min-box sim"><b>Cobrar R$ ' + money(totCob) + '.</b> O total apurado passou do mínimo de R$ ' +
+        money(S.minCob) + ' por colaborador.</div>'
+      : "");
 
   let h = "";
 
@@ -1259,30 +1274,25 @@ function render(){
   h += '<div class="kpis">' +
     kpi("Despesas autorizadas", "R$ " + money(val.reduce((a,r) => a + r.valor, 0)), val.length + " transações") +
     kpi("Total de refeições", "R$ " + money(meals.reduce((a,r) => a + r.valor, 0)), meals.length + " lançamentos") +
-    kpi("Dias com refeição", String(D.length),
-        ok.length + " dentro, " + tolera.length + " na tolerância") +
+    kpi("Dias com refeição", String(D.length), ok.length + " dentro do limite") +
     kpi("A recuperar", "R$ " + money(totCob),
-        totRej ? (acima.length + " dia(s) acima + " + REJ.length + " rejeitada(s)")
-               : ajustados ? ajustados + " dia(s) ajustado(s) à mão"
-               : acima.length + " dia(s) acima do limite", true) +
+        abaixoMin ? "R$ " + money(totApurado) + " apurado, abaixo do mínimo"
+          : totRej ? (acima.length + " dia(s) acima + " + REJ.length + " rejeitada(s)")
+          : ajustados ? ajustados + " dia(s) ajustado(s) à mão"
+          : acima.length + " dia(s) acima do limite", true) +
     kpi("A verificar", String(indef.length), "sem nº de pessoas") +
   '</div>';
 
   /* --- painel de recuperação --- */
   h += '<div class="sec"><h2><span class="eyebrow">Decisão</span> Valor a recuperar do colaborador</h2>' +
-       '<p>Só entram aqui os dias que passaram de R$ ' + money(S.limite + S.tol) +
-       ' por pessoa, ou seja, que estouraram o limite de R$ ' + money(S.limite) +
-       ' além da tolerância de R$ ' + money(S.tol) + '. Dia que ficou dentro da tolerância aparece em amarelo na apuração ' +
-       'e não é cobrado. São duas origens de cobrança. O <b>excedente da política</b>, contado a partir do limite de R$ ' +
-       money(S.limite) + ' — ' +
+       '<p>São duas origens de cobrança. O <b>excedente da política</b>, que é só o que passou do limite diário — ' +
        'e aí a cobrança é sua decisão: edite o valor e registre o motivo, porque um refrigerante que estourou o limite ' +
        'não precisa virar desconto. E a <b>despesa rejeitada</b>, marcada por você na tabela de transações, que é ' +
        'descontada pelo <b>valor cheio</b> por não ser uma despesa legítima da empresa. Os motivos entram no relatório ' +
        'impresso como justificativa.</p></div>';
 
   if (!acima.length && !D.some(d => d.ajuste != null)){
-    h += '<div class="tw"><div class="blank">Nenhum dia passou de R$ ' + money(S.limite + S.tol) + ' por pessoa' +
-         (tolera.length ? " — " + tolera.length + " ficaram na faixa de tolerância, sinalizados em amarelo mas não cobrados" : "") +
+    h += '<div class="tw"><div class="blank">Nenhum dia excedeu o limite' +
          (indef.length ? ", entre os que puderam ser apurados." : ".") +
          (totRej ? " Há apenas despesas rejeitadas, no quadro abaixo." : "") + '</div></div>';
   } else {
@@ -1309,12 +1319,13 @@ function render(){
       '</tr>';
     });
     h += '</tbody><tfoot><tr' + (totRej ? "" : ' class="tfoot-lead"') + '><td>' +
-         (totRej ? "Subtotal do excedente" : "Total a recuperar") + '</td>' +
+         (totRej ? "Subtotal do excedente" : "Total apurado") + '</td>' +
          '<td colspan="2"></td>' +
          '<td class="r num">R$ ' + money(totExc) + '</td>' +
          '<td class="r num">R$ ' + money(totLim) + '</td>' +
          '<td class="sub" style="color:inherit;opacity:.8">' +
          (totLim !== totExc ? "após ajustes manuais" : "sem ajustes") + '</td></tr></tfoot></table></div>';
+    if (!totRej) h += avisoMin;
   }
 
   /* --- despesas rejeitadas: cobradas pelo valor cheio --- */
@@ -1348,11 +1359,12 @@ function render(){
          '<td class="r num">R$ ' + money(totRej) + '</td>' +
          '<td colspan="2" class="sub">' +
          (totRej !== cheio ? "após ajuste do valor" : "pelo valor cheio") + '</td></tr>' +
-         '<tr class="tfoot-lead"><td>Total a recuperar</td><td colspan="2"></td>' +
-         '<td class="r num">R$ ' + money(totCob) + '</td>' +
+         '<tr class="tfoot-lead"><td>Total apurado</td><td colspan="2"></td>' +
+         '<td class="r num">R$ ' + money(totApurado) + '</td>' +
          '<td colspan="2" class="sub" style="color:inherit;opacity:.8">' +
          'excedente R$ ' + money(totLim) + ' + rejeitadas R$ ' + money(totRej) +
          '</td></tr></tfoot></table></div>';
+    h += avisoMin;
   }
 
   if (indef.length){
@@ -1366,8 +1378,7 @@ function render(){
   h += '<div class="sp"></div>';
   h += '<div class="sec"><h2><span class="eyebrow">Apuração</span> Aderência dia a dia</h2>' +
        '<p>Cada refeição é dividida pelo número de pessoas do recibo, e é esse valor por pessoa que se compara ao limite de R$ ' +
-       money(S.limite) + '. Até R$ ' + money(S.tol) + ' de estouro o dia fica <b>amarelo</b>: é sinalizado para você ver, mas não gera cobrança. ' +
-       'Acima disso fica vermelho e entra no valor a recuperar. Clique na data para ver os lançamentos do dia e corrigir o nº de pessoas.</p></div>';
+       money(S.limite) + '. Clique na data para ver os lançamentos do dia e corrigir o nº de pessoas.</p></div>';
   h += '<div class="tw"><table><thead><tr>' +
     '<th style="width:26px"></th><th>Data</th><th class="c">Itens</th><th class="r">Total do dia</th>' +
     '<th class="r">Gasto/pessoa</th><th class="r">Limite</th><th class="r">Diferença</th><th>Situação</th>' +
@@ -1378,8 +1389,7 @@ function render(){
   }
   D.forEach(d => {
     const k = S.titular + "|" + d.data, aberto = !!S.open[k];
-    const pill = d.estado === "acima" ? '<span class="pill p-acima">Acima da tolerância</span>'
-              : d.estado === "tol"   ? '<span class="pill p-tol">Na tolerância</span>'
+    const pill = d.estado === "acima" ? '<span class="pill p-acima">Acima do limite</span>'
               : d.estado === "indef" ? '<span class="pill p-indef">Falta nº de pessoas</span>'
               : '<span class="pill p-ok">Dentro do limite</span>';
     h += '<tr class="zebra s-' + d.estado + '">' +
@@ -1392,8 +1402,6 @@ function render(){
       '<td class="r num sub">R$ ' + money(S.limite) + '</td>' +
       '<td class="r num">' + (d.indef ? '<span class="sub">—</span>'
           : d.estado === "acima" ? '<span style="color:var(--crit);font-weight:600">+ ' + money(d.excedente) + '</span>'
-          : d.estado === "tol" ? '<span style="color:var(--tol);font-weight:600">+ ' + money(d.excesso) +
-                                 '</span><div class="sub" style="font-size:10px">tolerado</div>'
           : (S.limite - d.share) < 0.005 ? '<span class="sub">no limite</span>'
           : '<span class="sub">- ' + money(S.limite - d.share) + '</span>') + '</td>' +
       '<td>' + pill + '</td>' +
@@ -1422,8 +1430,7 @@ function render(){
        '</td><td colspan="4"></td></tr></tfoot></table></div>';
 
   h += '<div class="legend"><div><span class="pill p-ok">Dentro do limite</span> até R$ ' + money(S.limite) + ' por pessoa</div>' +
-       '<div><span class="pill p-tol">Na tolerância</span> estourou até R$ ' + money(S.tol) + ' — sinalizado, não cobrado</div>' +
-       '<div><span class="pill p-acima">Acima da tolerância</span> passou de R$ ' + money(S.limite + S.tol) + ', gera cobrança</div>' +
+       '<div><span class="pill p-acima">Acima do limite</span> gerou excedente a apurar</div>' +
        '<div><span class="pill p-indef">Falta nº de pessoas</span> refeição coletiva sem headcount no extrato</div></div>';
 
   /* --- transações --- */
@@ -1449,7 +1456,6 @@ function render(){
     } else {
       const d = D.find(x => x.data === r.data);
       pol = d && d.estado === "acima" ? '<span class="pill p-acima">Dia acima</span>'
-          : d && d.estado === "tol"   ? '<span class="pill p-tol">Na tolerância</span>'
           : d && d.estado === "indef" ? '<span class="pill p-indef">A verificar</span>'
           : '<span class="pill p-ok">Dentro</span>';
       if (r.mealFonte === "estabelecimento")
@@ -1647,9 +1653,9 @@ drop.addEventListener("drop", e => {
   if (e.dataTransfer && e.dataTransfer.files.length) readFile(e.dataTransfer.files[0]);
 });
 
-document.getElementById("tol").onchange = e => {
+document.getElementById("minc").onchange = e => {
   const v = parseFloat(e.target.value);
-  S.tol = isNaN(v) || v < 0 ? 0 : v; save(); render();
+  S.minCob = isNaN(v) || v < 0 ? 0 : v; save(); render();
 };
 document.getElementById("lim").onchange = e => {
   const v = parseFloat(e.target.value);
@@ -1667,7 +1673,7 @@ document.getElementById("cols").onclick = () => {
 
 const DEMO = [
 "Data da Transação;Transação;Valor em R$;Cartão;Status;Status de aprovação;Categoria da Compra;Recibo;Titular;Grupos;Localização;Descrição",
-"04/08/2026;RESTAURANTE DOM AFONSO;112.40;5512;Autorizada;Aprovada;Alimentação;Sim;MARIANA COUTINHO;201-COMERCIAL;POA;Jantar Mariana",
+"04/08/2026;RESTAURANTE DOM AFONSO;92.40;5512;Autorizada;Aprovada;Alimentação;Sim;MARIANA COUTINHO;201-COMERCIAL;POA;Jantar Mariana",
 "04/08/2026;PADARIA CENTRAL;24.90;5512;Autorizada;Aprovada;Alimentação;Sim;MARIANA COUTINHO;201-COMERCIAL;POA;Almoço Mariana",
 "05/08/2026;CANTINA DA ESQUINA;96.00;5512;Autorizada;Aprovada;Alimentação;Sim;MARIANA COUTINHO;201-COMERCIAL;POA;Jantar Mariana",
 "06/08/2026;MERCADO SAO JORGE;6.50;5512;Autorizada;Aprovada;Lojas De Varejo;Sim;MARIANA COUTINHO;201-COMERCIAL;POA;Água mineral no almoço",
